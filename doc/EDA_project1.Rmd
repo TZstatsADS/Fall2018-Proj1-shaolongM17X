@@ -1,0 +1,274 @@
+---
+title: "EDA of Happy DB"
+output: html_document
+---
+### Load libraries...
+
+I used a library called sentimentr for sentimental analysis. i.e. I will give each sentence a number signaling how happy they are based on the content of the sentence. I will mark the session where I used this package, so that if you are unable to download or deploy this package you can still see the rest of my analysis. Also I used package 'ggthemes' to give my ggplot more color
+
+```{r load libraries, warning=FALSE, message=FALSE}
+
+library(tidyverse)
+library(tidytext)
+library(DT)
+library(scales)
+library(wordcloud2)
+library(gridExtra)
+library(ngram)
+library(shiny) 
+library(forcats)
+library(sentimentr)
+library(ggthemes)
+
+```
+
+
+
+### Load data needed...
+
+```{r load data, warning=FALSE, message=FALSE}
+hm_data <- read_csv("../output/processed_moments.csv")
+
+urlfile<-'https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/demographic.csv'
+demo_data <- read_csv(urlfile)
+
+entertainment_topic <- read.csv('https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/topic_dict/entertainment-dict.csv', header = FALSE)
+
+exercise <- read.csv('https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/topic_dict/exercise-dict.csv', header = FALSE)
+
+family <- read.csv('https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/topic_dict/family-dict.csv', header = FALSE)
+
+food <- read.csv('https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/topic_dict/food-dict.csv', header = FALSE)
+
+people <- read.csv('https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/topic_dict/people-dict.csv', header = FALSE)
+
+pets <- read.csv('https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/topic_dict/pets-dict.csv', header = FALSE)
+
+school <- read.csv('https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/topic_dict/school-dict.csv', header = FALSE)
+
+shopping <- read.csv('https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/topic_dict/shopping-dict.csv', header = FALSE)
+
+work <- read.csv('https://raw.githubusercontent.com/rit-public/HappyDB/master/happydb/data/topic_dict/work-dict.csv', header = FALSE)
+
+```
+
+
+### Explore
+
+#### When people are talking about happiness, what are they really talking about?
+
+now pre-process data. For hm_data it's the same as in HappyDB_RShiny.Rmd. Then I assign each sentence a category based on dictionaries available from HappyDB's Github
+
+```{r pre-processing, warning=FALSE, message=FALSE}
+hm_data <- hm_data %>%
+  inner_join(demo_data, by = "wid") %>%
+  select(wid,
+         original_hm,
+         gender, 
+         marital, 
+         parenthood,
+         reflection_period,
+         age, 
+         country, 
+         ground_truth_category, 
+         text) %>%
+  mutate(count = sapply(hm_data$text, wordcount)) %>%
+  filter(gender %in% c("m", "f")) %>%
+  filter(marital %in% c("single", "married")) %>%
+  filter(parenthood %in% c("n", "y")) %>%
+  filter(reflection_period %in% c("24h", "3m")) %>%
+  mutate(reflection_period = fct_recode(reflection_period, 
+                                        months_3 = "3m", hours_24 = "24h"))
+
+data_with_row_no <- hm_data %>%
+  mutate(sentense_id = row_number()) 
+
+data <- data_with_row_no %>%
+  unnest_tokens(word, text)
+
+# classify each word to each different category
+data <- data %>%
+  mutate(is_entertainment = word %in% entertainment_topic$V1) %>%
+  mutate(is_exercise = word %in% exercise$V1) %>%
+  mutate(is_family = word %in% family$V1) %>%
+  mutate(is_food = word %in% food$V1) %>%
+  mutate(is_people = word %in% people$V1) %>%
+  mutate(is_pets = word %in% pets$V1) %>%
+  mutate(is_school = word %in% school$V1) %>%
+  mutate(is_shopping = word %in% shopping$V1) %>%
+  mutate(is_work = word %in% work$V1)
+
+sentence_categories <- data %>% 
+  group_by(sentense_id) %>%
+  summarise(entertainment = sum(is_entertainment) > 0, exercise = sum(is_exercise)>0, family = sum(is_family)>0, food = sum(is_food)>0, people =sum(is_people)>0,pets=sum(is_pets)>0, school = sum(is_school)>0, shopping = sum(is_shopping)>0, work = sum(is_work)>0)
+
+# now recombine sentences with hm_data
+data_with_categories <- data_with_row_no%>% 
+  inner_join(sentence_categories, by = "sentense_id")
+
+data_with_categories <- data_with_categories %>%
+  mutate(has_category = exercise + family+food+people+pets+school+shopping+work)
+```
+
+check how much percentage of sentences in this database can be categorized using categories given by HappyDB
+
+```{r}
+with_categories <- data_with_categories %>%
+  filter(has_category > 0)
+nrow(with_categories)/nrow(data_with_categories)
+```
+
+That's a fair amount of samples.. explore further using this subset. Others that don't have a category probably due to the small dictionaries given by HappyDB. Might be other better ways to capture the category. Let's look at how these categories are distributed. Notice that one sentence might have multiple categories.
+
+```{r, warning=FALSE, message=FALSE}
+categories_distribution <- data.frame(entertainment = sum(with_categories$entertainment), exercise = sum(with_categories$exercise), family = sum(with_categories$family),food = sum(with_categories$food),people = sum(with_categories$people),pets = sum(with_categories$pets),school = sum(with_categories$school),shopping = sum(with_categories$shopping),work = sum(with_categories$work))
+
+categories_distribution <- categories_distribution %>%
+  gather("category", "value", 1:9)
+
+categories_distribution %>%
+  ggplot(aes(x = category, y=value, fill=category)) +
+  geom_bar(stat = "identity", width = 0.5) +
+  theme_economist() +
+  geom_text(aes(label = value, vjust = -0.8, hjust = 0.5, color = category), show_guide = FALSE) + 
+  ylim(min(categories_distribution$value, 0)*1.1, max(categories_distribution$value)*1.1)
+```
+
+Happiness definitely more strongly related to people & family. Let's see some examples of the people category. Basically it's something about the other people.
+
+```{r}
+ppl <- with_categories %>%
+  filter(people)
+head(ppl$original_hm)
+```
+
+#### are there geographical difference for these categories..?
+
+```{r}
+top_ten <- with_categories %>%
+  group_by(country) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  mutate(rank = row_number()) %>%
+  filter(rank <= 10)
+
+top_five <- top_ten %>%
+  filter(rank <= 5)
+```
+
+Seems like in this dataset a majority of people is from the US. So we will just look at the percentage for the top 5 countries.
+
+```{r}
+mekko_graph <- with_categories %>%
+  group_by(country) %>%
+  summarise(entertainment = sum(entertainment), exercise = sum(exercise), family = sum(family), food=sum(food), people=sum(people), pets=sum(pets), school=sum(school), shopping=sum(shopping), work=sum(work)) %>%
+  filter(country %in% top_five$country)
+
+mekko_graph <- mekko_graph %>%
+  mutate(total = entertainment+exercise+family+food+people+pets+school+shopping+work) %>%
+  mutate(entertainment = round(entertainment / total,digits=3)*100,exercise = round(exercise / total,digits=3)*100, family = round(family / total,digits=3)*100,food = round(food / total,digits=3)*100,people = round(people / total,digits=3)*100,pets = round(pets / total,digits=3)*100,school = round(school / total,digits=3)*100,shopping = round(shopping / total,digits=3)*100,work = round(work / total,digits=3)*100)
+
+mekko_graph$total <- NULL
+mekko_graph
+```
+As we can see there's really not that much difference, except Indian people care less about food than the rest of the world when it comes to happiness...
+
+#### What about the influence of gender, marital status, parenthood, reflection_period, age?
+
+```{r}
+create_mekko_table <- function(data, factors) {
+  mekko_graph <-  data %>%
+  group_by_(factors) %>%
+  summarise(entertainment = sum(entertainment), exercise = sum(exercise), family = sum(family), food=sum(food), people=sum(people), pets=sum(pets), school=sum(school), shopping=sum(shopping), work=sum(work))
+  mekko_graph <- mekko_graph %>%
+  mutate(total = entertainment+ exercise+family+food+people+pets+school+shopping+work) %>%
+  mutate(entertainment = round(entertainment / total,digits=3)*100, exercise = round(exercise / total,digits=3)*100, family = round(family / total,digits=3)*100,food = round(food / total,digits=3)*100,people = round(people / total,digits=3)*100,pets = round(pets / total,digits=3)*100,school = round(school / total,digits=3)*100,shopping = round(shopping / total,digits=3)*100,work = round(work / total,digits=3)*100)
+
+mekko_graph$total <- NULL
+return(mekko_graph) 
+}
+create_mekko_table(with_categories,'gender')
+create_mekko_table(with_categories, 'marital')
+create_mekko_table(with_categories, 'parenthood')
+create_mekko_table(with_categories, 'reflection_period')
+```
+
+well not that much of a difference. What about ages? I suspect younger people will care more about gaming 
+
+```{r}
+with_categories %>%
+  group_by(age) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+```
+I will use 22 as a bar here, then 23~40, above 40
+```{r}
+age_range <- with_categories %>%
+  mutate(age_range = ifelse(age <= 22, 'below 22', ifelse(age <=40, 'below 40 but greater than 22', 'greater than 40')))
+create_mekko_table(age_range, 'age_range')
+```
+still no obvious conclusion. 
+
+#### So to sum up, when it comes to the thing that came to mind when asked about happiness, friends and family always come first, no matter of where you live and how old you are.
+
+We also have the word count at hand. Wondering for different categories, are there any difference in terms of the number of words they used? For example I assume when it comes to family, people will talk more while for entertainment, people will say less, like a simple sentence:"nintendo is fun!"
+
+```{r}
+word_count_data <- with_categories %>%
+  mutate(word_count = sapply(with_categories$original_hm, wordcount))
+
+generate_category_wordcount_data <- function(data, cat) {
+  dt <- data %>%
+  filter_(cat) %>%
+  mutate(category = cat) %>%
+    select(category, word_count)
+  return(dt)
+}
+
+word_count <- rbind(generate_category_wordcount_data(word_count_data, 'entertainment'),
+                    generate_category_wordcount_data(word_count_data,'exercise'),
+                    generate_category_wordcount_data(word_count_data,'family'),
+                    generate_category_wordcount_data(word_count_data,'food'),
+                    generate_category_wordcount_data(word_count_data,'people'),
+                    generate_category_wordcount_data(word_count_data,'pets'),
+                    generate_category_wordcount_data(word_count_data,'school'),
+                    generate_category_wordcount_data(word_count_data,'shopping'),
+                    generate_category_wordcount_data(word_count_data,'work'))
+word_count %>%
+  ggplot(aes(x = word_count)) +
+  geom_histogram(bins=40) +
+  facet_wrap(~ category) +
+  xlab("word count") +
+  ylab("occurance")
+```
+No apparent results.. but who's writing that many words??
+
+```{r}
+word_count_data %>%
+  filter(word_count > 1000) %>%
+  select(original_hm)
+```
+
+Ok someone is writing an essay about their journey.. try the previous plotting part again by removing outliers
+
+```{r}
+word_count_data <- word_count_data %>%
+  filter(word_count <= 100)
+word_count <- rbind(generate_category_wordcount_data(word_count_data, 'entertainment'),
+                    generate_category_wordcount_data(word_count_data,'exercise'),
+                    generate_category_wordcount_data(word_count_data,'family'),
+                    generate_category_wordcount_data(word_count_data,'food'),
+                    generate_category_wordcount_data(word_count_data,'people'),
+                    generate_category_wordcount_data(word_count_data,'pets'),
+                    generate_category_wordcount_data(word_count_data,'school'),
+                    generate_category_wordcount_data(word_count_data,'shopping'),
+                    generate_category_wordcount_data(word_count_data,'work'))
+word_count %>%
+  ggplot(aes(x = word_count)) +
+  geom_histogram(bins=40) +
+  facet_wrap(~ category) +
+  xlab("word count") +
+  ylab("occurance")
+
+```
+There's really not that much difference.

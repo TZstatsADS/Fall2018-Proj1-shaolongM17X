@@ -28,6 +28,7 @@ library(tm)
 library(tidytext)
 library(tidyverse)
 library(DT)
+library(stringr)
 ```
 
 ### Step 1 - Load the data to be cleaned and processed
