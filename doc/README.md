@@ -1,4 +1,4 @@
 # ADS Project 1: What made you happy today?
 ### Doc folder
 
-The doc directory contains the report or presentation files. It can have subfolders.  
+EDA_project1.Rmd is the project file where all the exploratory works have been done.
